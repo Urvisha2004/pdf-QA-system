@@ -1,0 +1,82 @@
+superuser:-
+username:-uru
+emailid:=uru@gmail.com
+password:-uru@1234
+
+
+
+requiement.txt
+Django>=4.0
+openai>=1.0
+PyPDF2>=3.0
+python-dotenv>=1.0
+
+
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\activate
+1.after activate
+pip install --upgrade pip setuptools wheel
+pip install PyMuPDF
+pip install django
+python -m django --version
+pip install python-dotenv
+pip freeze > requirements.txt
+pip install openai
+
+
+1. Go to: https://console.groq.com/keys
+Create free account
+
+Get your API key
+
+
+_______________________________________
+for pptx
+_______________________________________
+pip install python-pptx
+1.utils.py pdfapp .py
+2.upload_pdf.html
+3.views.py(import and functions)
+
+
+_____________________
+for translatation
+_______________________________________
+pip install deep-translator
+---------------------------------------------------
+--------------------------------------------------
+1. User-Specific Question History
+Step 1: Create a Model
+Step 2:-In your views.py where LLM answers the question:
+
+_______________________________________
+install library
+pip install fastapi uvicorn sentence-transformers faiss-cpu pdfplumber transformers spacy
+pip install "spacy[ja]"  # if you want multilingual tokenizer
+python -m spacy download en_core_web_sm
+
+
+downloads:- # For Windows/Mac/Linux
+https://ollama.com/download
+
+
+#after chromadb
+pip install langchain
+pip install langchain openai faiss-cpu
+pip install -U langchain-community
+
+
+ python manage.py collectstatic
+ set OLLAMA_HOST=127.0.0.1:11435
+ C:\Users\BAPS>ollama list
+NAME         ID              SIZE      MODIFIED
+qwen:0.5b    b5dc5e784f2a    394 MB    3 days ago
+
+
+After:-
+ollama pull qwen:0.5b
+
+
+youtube 
+https://github.com/tonykipkemboi/ollama_pdf_rag/blob/main/notebooks/experiments/updated_rag_notebook.ipynb

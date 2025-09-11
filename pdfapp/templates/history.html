@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Question History</h2>
+<ul>
+  {% for item in history %}
+  <li>
+    <b>PDF:</b> {{ item.pdf_name }}<br>
+    <b>Q:</b> {{ item.question }}<br>
+    <b>A:</b> {{ item.answer }}<br>
+    <i>{{ item.timestamp }}</i>
+    <hr>
+  </li>
+  {% endfor %}
+</ul>
+
+{% endblock %}

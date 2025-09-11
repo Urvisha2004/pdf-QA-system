@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}PDF Question Answering{% endblock %}
+
+{% block content %}
+  <h2>Ask Questions from PDF</h2>
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <label>Select PDF File:</label>
+    <input type="file" name="pdf" required><br><br>
+
+    <label>Your Question:</label>
+    <input type="text" name="question" required><br><br>
+
+    <input type="submit" value="Ask">
+  </form>
+
+  {% if answer %}
+    <h3>Answer: {{ answer }}</h3>
+  {% endif %}
+
+  
+{% endblock %}

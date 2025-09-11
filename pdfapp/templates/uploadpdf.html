@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Upload PDF{% endblock %}
+
+{% block content %}
+<h2>Upload PDF to generate PPT</h2>
+
+{% if error %}
+    <p style="color: red;">{{ error }}</p>
+{% endif %}
+
+<form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <input type="file" name="pdf_file" required>
+    <button type="submit">Submit</button>
+</form>
+
+{% if message %}
+    <p style="color: green;">{{ message }}</p>
+{% endif %}
+{% endblock %}

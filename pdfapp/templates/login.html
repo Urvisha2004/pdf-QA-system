@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Login{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <h2>Login</h2>
+    <form method="POST" class="mt-3">
+        {% csrf_token %}
+        <div class="form-group">
+            <input type="text" name="username" placeholder="Username" class="form-control" required>
+        </div>
+        <br>
+        <div class="form-group">
+            <input type="password" name="password" placeholder="Password" class="form-control" required>
+        </div>
+        <br>
+        <button type="submit" class="btn btn-primary">Login</button>
+        <center><a href="{% url 'registration' %}" class="btn btn-link">New user? Register here</a></center>
+        <center><a href="{% url 'forgetpass' %}" class="btn btn-link"> here</a></center>
+
+    </form>
+
+    {% if error %}
+    <div class="alert alert-danger mt-3">
+        {{ error }}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

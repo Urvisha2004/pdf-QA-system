@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Forgot Password{% endblock %}
+
+{% block content %}
+<h2>Forgot Password</h2>
+<form method="POST">
+    {% csrf_token %}
+    <input type="text" name="email_or_username" placeholder="Enter Email or Username" required><br><br>
+    <input type="password" name="new_password" placeholder="New Password" required><br><br>
+    <input type="password" name="confirm_password" placeholder="Confirm Password" required><br><br>
+    <button type="submit">Reset Password</button>
+</form>
+
+{% if message %}
+<p style="color: green;">{{ message }}</p>
+{% endif %}
+{% if error %}
+<p style="color: red;">{{ error }}</p>
+{% endif %}
+{% endblock %}

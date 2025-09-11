@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Step 2: Ask a Question</h2>
+
+{% if error %}
+<p style="color: red;">{{ error }}</p>
+{% endif %}
+
+<form method="post" id="question-form">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" id="submit-btn">
+        Get Answer
+        <span id="spinner" style="display: none;">&#x21bb;</span>
+    </button>
+</form>
+
+{% if answer %}
+<h3>Answer:</h3>
+<div style="margin-top: 10px; padding: 10px; border: 1px solid #ccc; background-color: #f9f9f9;">
+    {{ answer|safe }}
+</div>
+{% endif %}
+
+<br>
+
+{% endblock %}
