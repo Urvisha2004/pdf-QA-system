@@ -27,9 +27,9 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
    # path('', views.index, name='index'),
-       path('', views.upload_pdf, name='upload_pdf'),
-    path('ask/', views.ask_question, name='ask_question'),
-path('reset/', views.reset_session, name='reset'),
+     path('', views.upload_pdf, name='upload_pdf'),
+    path('ask/', views.ask_question_view, name='ask_question'),
+    path('reset/', views.reset_session, name='reset_session'),
         path('logout/', auth_views.LogoutView.as_view(), name='logout'),
 
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)   # path('forgetpass/', views.forgot_password_view, name='forgetpass'),

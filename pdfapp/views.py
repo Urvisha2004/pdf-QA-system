@@ -229,85 +229,149 @@ def get_file_hash(file_path):
 def reset_session(request):
     request.session.flush()
     return redirect('upload_pdf')'''
-import os
-import uuid
+
+'''after delete...........
+import os, uuid
 from django.shortcuts import render, redirect
 from .forms import PDFUploadForm, QuestionForm
-from .utils import process_pdf_to_chroma, ask_question, ask_question_multilingual
+from .utils import process_pdf_to_chroma, ask_question_multilingual, UPLOAD_DIR
 
-# Temporary in-memory storage for vector DBs
+# Session vector store
 SESSION_VECTOR_STORES = {}
 
-# ---------------------------
-# Upload PDF & create vector DB
-# ---------------------------
+# ---------------- Upload PDF ----------------
 def upload_pdf(request):
     if request.method == "POST":
         uploaded_file = request.FILES.get("pdf_file")
         if not uploaded_file:
-            return render(request, "uploadpdf.html", {"error": "Please select a PDF file!"})
+            return render(request, "uploadpdf.html", {"error": "Please select a PDF file!", "form": PDFUploadForm()})
 
-        # Save PDF temporarily
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        upload_dir = os.path.join(BASE_DIR, "uploads")
-        os.makedirs(upload_dir, exist_ok=True)
-
-        pdf_filename = f"{uuid.uuid4()}.pdf"
-        pdf_path = os.path.join(upload_dir, pdf_filename)
-
+        pdf_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}.pdf")
         with open(pdf_path, "wb+") as f:
             for chunk in uploaded_file.chunks():
                 f.write(chunk)
 
-        # Process PDF into vector DB
-        vector_db = process_pdf_to_chroma(pdf_path, collection_name="my_pdf_collection")
+        try:
+            vector_db = process_pdf_to_chroma(pdf_path, collection_name=str(uuid.uuid4()))
+        except Exception as e:
+            return render(request, "uploadpdf.html", {"error": f"PDF processing failed: {e}", "form": PDFUploadForm()})
 
-        # Store vector DB in session
         user_id = str(uuid.uuid4())
         request.session['user_id'] = user_id
         SESSION_VECTOR_STORES[user_id] = vector_db
 
-        # Delete PDF to save space
         os.remove(pdf_path)
+        return render(request, "ask.html", {"message": "PDF processed successfully!", "form": QuestionForm()})
 
-        return render(request, "ask.html", {"message": "PDF processed successfully!"})
+    return render(request, "uploadpdf.html", {"form": PDFUploadForm()})
 
-    return render(request, "uploadpdf.html")
-
-
-# ---------------------------
-# Ask question using vector DB
-# ---------------------------
+# ---------------- Ask Question ----------------
 def ask_question_view(request):
     answer = None
     error = None
-
     user_id = request.session.get('user_id')
     vector_db = SESSION_VECTOR_STORES.get(user_id)
 
     if not vector_db:
-        error = "Your session expired or no PDF uploaded. Please re-upload the PDF."
+        error = "Session expired or no PDF uploaded. Please re-upload PDF."
         form = QuestionForm()
     else:
         if request.method == "POST":
             form = QuestionForm(request.POST)
             if form.is_valid():
                 question = form.cleaned_data['question']
-                # You can switch between ask_question or multilingual version
-                answer = ask_question_multilingual(vector_db, question)
+                lang = form.cleaned_data['answer_lang']
+                try:
+                    answer = ask_question_multilingual(vector_db, question, lang)
+                except Exception as e:
+                    error = f"Error generating answer: {e}"
         else:
             form = QuestionForm()
 
     return render(request, "ask.html", {"form": form, "answer": answer, "error": error})
 
-
-# ---------------------------
-# Reset session (clear vector DB)
-# ---------------------------
+# ---------------- Reset Session ----------------
 def reset_session(request):
     user_id = request.session.get('user_id')
     if user_id in SESSION_VECTOR_STORES:
         del SESSION_VECTOR_STORES[user_id]
-
     request.session.flush()
-    return redirect('/')
+    return redirect('upload_pdf')'''
+import os
+import uuid
+from django.shortcuts import render, redirect
+from .forms import PDFUploadForm, QuestionForm
+from .utils import (
+    process_pdf_to_chroma,
+    ask_question_multilingual,
+    load_vector_db,
+    delete_collection,
+    format_answer,
+    UPLOAD_DIR
+)
+
+# ---------------- Upload PDF ----------------
+def upload_pdf(request):
+    if request.method == "POST":
+        uploaded_file = request.FILES.get("pdf_file")
+        if not uploaded_file:
+            return render(request, "uploadpdf.html", {"error": "Please select a PDF file!", "form": PDFUploadForm()})
+
+        # Save temporarily
+        pdf_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}.pdf")
+        with open(pdf_path, "wb+") as f:
+            for chunk in uploaded_file.chunks():
+                f.write(chunk)
+
+        try:
+            collection_name = str(uuid.uuid4())
+            process_pdf_to_chroma(pdf_path, collection_name)
+        except Exception as e:
+            return render(request, "uploadpdf.html", {"error": f"PDF processing failed: {e}", "form": PDFUploadForm()})
+        finally:
+            os.remove(pdf_path)  # always delete uploaded file
+
+        # Save collection name in session
+        request.session['collection_name'] = collection_name
+        request.session['vector_db_loaded'] = True
+
+        return render(request, "ask.html", {"message": "✅ PDF processed successfully!", "form": QuestionForm()})
+
+    return render(request, "uploadpdf.html", {"form": PDFUploadForm()})
+
+# ---------------- Ask Question ----------------
+def ask_question_view(request):
+    answer = None
+    error = None
+    collection_name = request.session.get('collection_name')
+
+    if not collection_name:
+        error = "Session expired or no PDF uploaded. Please re-upload PDF."
+        form = QuestionForm()
+        return render(request, "ask.html", {"form": form, "answer": answer, "error": error})
+
+    # Load vector DB only once per session
+    vector_db = load_vector_db(collection_name)
+
+    if request.method == "POST":
+        form = QuestionForm(request.POST)
+        if form.is_valid():
+            question = form.cleaned_data['question']
+            lang = form.cleaned_data['answer_lang']
+            try:
+                raw_answer = ask_question_multilingual(vector_db, question, lang)
+                answer = format_answer(raw_answer)
+            except Exception as e:
+                error = f"Error generating answer: {e}"
+    else:
+        form = QuestionForm()
+
+    return render(request, "ask.html", {"form": form, "answer": answer, "error": error})
+
+# ---------------- Reset/Delete Notebook ----------------
+def reset_session(request):
+    collection_name = request.session.get('collection_name')
+    if collection_name:
+        delete_collection(collection_name)
+    request.session.flush()
+    return redirect('upload_pdf')

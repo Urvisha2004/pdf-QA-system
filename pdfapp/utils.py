@@ -250,45 +250,65 @@ def ask_question(
     return getattr(result, "content", str(result)).strip()
 '''
 
+
+'''ater delete...........
 import os
+import uuid
 import pdfplumber
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
+from langchain_community.llms import HuggingFacePipeline
 from langchain_community.embeddings import HuggingFaceEmbeddings
+
 from langchain_ollama import OllamaLLM
+from langchain.llms import HuggingFacePipeline
+from transformers import pipeline
 from langdetect import detect
 from deep_translator import GoogleTranslator
 
-# ---------------------------
-# Paths
-# ---------------------------
+try:
+    from PIL import Image
+    import pytesseract
+    OCR_AVAILABLE = True
+except:
+    OCR_AVAILABLE = False
+
+# ---------------- Paths ----------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_ROOT = os.path.join(BASE_DIR, "chroma_store")
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(CHROMA_ROOT, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ---------------------------
-# Models
-# ---------------------------
+# ---------------- Models ----------------
 EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 LLM_MODEL = "qwen2.5:1.5b"  # Ollama local model
 
-# ---------------------------
-# PDF Text Extraction
-# ---------------------------
-def extract_text_from_pdf(path: str) -> str:
+# ---------------- PDF Extraction ----------------
+def extract_text_from_pdf(pdf_path: str) -> str:
     text = ""
-    with pdfplumber.open(path) as pdf:
+    with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             text += (page.extract_text() or "") + "\n"
+
+    # Fallback OCR
+    if not text.strip() and OCR_AVAILABLE:
+        from pdf2image import convert_from_path
+        pages = convert_from_path(pdf_path)
+        for page_image in pages:
+            text += pytesseract.image_to_string(page_image) + "\n"
+
     return text.strip()
 
-# ---------------------------
-# Build Chroma store
-# ---------------------------
+# ---------------- Vector DB ----------------
 def process_pdf_to_chroma(pdf_path: str, collection_name: str) -> Chroma:
     raw_text = extract_text_from_pdf(pdf_path)
+    if not raw_text:
+        raise ValueError("No text found in PDF")
+
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.split_text(raw_text)
+
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
     vector_db = Chroma.from_texts(
         texts=chunks,
@@ -299,21 +319,166 @@ def process_pdf_to_chroma(pdf_path: str, collection_name: str) -> Chroma:
     vector_db.persist()
     return vector_db
 
-# ---------------------------
-# Ask question (RAG)
-# ---------------------------
+# ---------------- Ask Question ----------------
 def ask_question(vector_db: Chroma, question: str, k: int = 5) -> str:
     if not question.strip():
         return "Please provide a question."
+
     retriever = vector_db.as_retriever(search_kwargs={"k": k})
     docs = retriever.get_relevant_documents(question)
     if not docs:
-        return "No relevant context found in this document."
+        return "Answer not found in the document."
+
     context = "\n\n".join([d.page_content for d in docs])
-    llm = OllamaLLM(model=LLM_MODEL)
     prompt = f"""
-You are a helpful assistant.
-Answer the question using ONLY the context. If the answer is not present, say: "Answer not found in the document."
+Answer the question using ONLY the context below.
+Context:
+{context}
+
+Question:
+{question}
+
+Answer:
+"""
+
+    # Try Ollama first
+    try:
+        llm = OllamaLLM(model=LLM_MODEL)
+        result = llm(prompt)
+        return result.strip() if isinstance(result, str) else getattr(result, "content", str(result)).strip()
+    except Exception as e:
+        print("Ollama error:", e)
+        # Fallback to HuggingFace
+        pipe = pipeline("text-generation", model="gpt2", max_new_tokens=200)
+        hf_llm = HuggingFacePipeline(pipeline=pipe)
+        result = hf_llm(prompt)
+        return result.strip() if isinstance(result, str) else str(result)
+
+# ---------------- Multilingual QA ----------------
+def ask_question_multilingual(vector_db: Chroma, user_question: str, target_lang: str = "en") -> str:
+    try:
+        src_lang = detect(user_question)
+    except:
+        src_lang = "en"
+
+    # Translate question to English if needed
+    q_en = GoogleTranslator(source=src_lang, target="en").translate(user_question) if src_lang != "en" else user_question
+
+    # Get answer in English
+    answer_en = ask_question(vector_db, q_en)
+
+    # Translate answer back to target language
+    if target_lang != "en":
+        return GoogleTranslator(source="en", target=target_lang).translate(answer_en)
+    return answer_en'''
+
+import os
+import uuid
+import shutil
+import pdfplumber
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from transformers import pipeline
+from langdetect import detect
+from deep_translator import GoogleTranslator
+
+try:
+    from PIL import Image
+    import pytesseract
+    OCR_AVAILABLE = True
+except:
+    OCR_AVAILABLE = False
+
+# ---------------- Paths ----------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_ROOT = os.path.join(BASE_DIR, "chroma_store")
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(CHROMA_ROOT, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# ---------------- Models ----------------
+EMBED_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+LLM_MODEL = "qwen2.5:1.5b"  # Ollama local model
+
+# Load Ollama LLM only once (global)
+ollama_llm = OllamaLLM(model=LLM_MODEL)
+
+# Cache vector DBs to avoid reloading every time
+VECTOR_CACHE = {}
+
+# ---------------- PDF Extraction ----------------
+def extract_text_from_pdf(pdf_path: str) -> str:
+    text = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text += (page.extract_text() or "") + "\n"
+
+    # Fallback OCR if no text
+    if not text.strip() and OCR_AVAILABLE:
+        from pdf2image import convert_from_path
+        pages = convert_from_path(pdf_path)
+        for page_image in pages:
+            text += pytesseract.image_to_string(page_image) + "\n"
+
+    return text.strip()
+
+# ---------------- Process PDF into Chroma ----------------
+def process_pdf_to_chroma(pdf_path: str, collection_name: str) -> str:
+    raw_text = extract_text_from_pdf(pdf_path)
+    if not raw_text:
+        raise ValueError("No text found in PDF")
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = splitter.split_text(raw_text)
+
+    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
+    vector_db = Chroma.from_texts(
+        texts=chunks,
+        embedding=embeddings,
+        collection_name=collection_name,
+        persist_directory=CHROMA_ROOT
+    )
+    vector_db.persist()
+
+    # Cache in memory
+    VECTOR_CACHE[collection_name] = vector_db
+    return collection_name
+
+# ---------------- Reload Vector DB (with cache) ----------------
+def load_vector_db(collection_name: str) -> Chroma:
+    if collection_name in VECTOR_CACHE:
+        return VECTOR_CACHE[collection_name]
+
+    vector_db = Chroma(
+        collection_name=collection_name,
+        embedding_function=HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME),
+        persist_directory=CHROMA_ROOT
+    )
+    VECTOR_CACHE[collection_name] = vector_db
+    return vector_db
+
+# ---------------- Ask Question ----------------
+def ask_question(vector_db: Chroma, question: str, k: int = 5) -> str:
+    if not question.strip():
+        return "Please provide a question."
+
+    retriever = vector_db.as_retriever(search_kwargs={"k": k})
+    docs = retriever.get_relevant_documents(question)
+
+    # If nothing found → return message
+    if not docs:
+        return "❌ Not found in PDF"
+
+    # Join docs as context
+    context = "\n\n".join([d.page_content for d in docs])
+
+    # Strict prompt
+    prompt = f"""
+You are a PDF Question Answering Assistant. 
+ONLY use the context below to answer. 
+If the answer is not in the context, reply with: "❌ Not found in PDF".
 
 Context:
 {context}
@@ -323,17 +488,49 @@ Question:
 
 Answer:
 """
-    result = llm(prompt)
-    return result.strip() if isinstance(result, str) else getattr(result, "content", str(result)).strip()
 
-# ---------------------------
-# Multilingual QA
-# ---------------------------
+    try:
+        result = ollama_llm(prompt)
+        return result.strip() if isinstance(result, str) else getattr(result, "content", str(result)).strip()
+    except Exception as e:
+        print("Ollama error:", e)
+        pipe = pipeline("text-generation", model="gpt2", max_new_tokens=200)
+        return pipe(prompt)[0]["generated_text"]
+
+# ---------------- Multilingual QA ----------------
 def ask_question_multilingual(vector_db: Chroma, user_question: str, target_lang: str = "en") -> str:
     try:
         src_lang = detect(user_question)
     except:
         src_lang = "en"
+
     q_en = GoogleTranslator(source=src_lang, target="en").translate(user_question) if src_lang != "en" else user_question
     answer_en = ask_question(vector_db, q_en)
-    return GoogleTranslator(source="en", target=target_lang).translate(answer_en) if target_lang != "en" else answer_en
+
+    if target_lang != "en":
+        return GoogleTranslator(source="en", target=target_lang).translate(answer_en)
+    return answer_en
+
+# ---------------- Delete Collection ----------------
+def delete_collection(collection_name: str):
+    path = os.path.join(CHROMA_ROOT, collection_name)
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    if collection_name in VECTOR_CACHE:
+        del VECTOR_CACHE[collection_name]
+
+# ---------------- Format Answer ----------------
+def format_answer(raw_answer: str) -> str:
+    text = raw_answer.strip()
+    formatted = []
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if line:
+            if ":" in line:  # treat "Title: description" format
+                title, desc = line.split(":", 1)
+                formatted.append(f"<b>{title.strip()}</b><br>{desc.strip()}")
+            else:
+                formatted.append(f"• {line}")
+
+    return "<br><br>".join(formatted)

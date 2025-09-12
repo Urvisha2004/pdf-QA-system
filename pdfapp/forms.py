@@ -33,15 +33,20 @@ class PDFQuestionForm(forms.Form):
 from django import forms
 
 class PDFUploadForm(forms.Form):
-    pdf = forms.FileField(label="Upload PDF")
+    pdf_file = forms.FileField(label="Upload PDF")
 
 class QuestionForm(forms.Form):
-    question = forms.CharField(label="Ask your question", widget=forms.Textarea(attrs={'rows': 3}))
-    answer_lang = forms.ChoiceField(label="Choose Answer Language", choices=[
-        ('en', 'English'),
-        ('hi', 'Hindi'),
-        ('fr', 'French'),
-        # Add more as needed
-    ])
-
-
+    question = forms.CharField(
+        label="Ask your question",
+        widget=forms.Textarea(attrs={'rows': 3})
+    )
+    answer_lang = forms.ChoiceField(
+        label="Choose Answer Language",
+        choices=[
+            ('en', 'English'),
+            ('hi', 'Hindi'),
+            ('fr', 'French'),
+            ('es', 'Spanish'),
+        ],
+        initial='en'
+    )
