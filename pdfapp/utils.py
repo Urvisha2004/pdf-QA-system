@@ -373,16 +373,16 @@ def ask_question_multilingual(vector_db: Chroma, user_question: str, target_lang
     return answer_en'''
 
 import os
-import uuid
-import shutil
-import pdfplumber
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_ollama import OllamaLLM
-from transformers import pipeline
-from langdetect import detect
-from deep_translator import GoogleTranslator
+import uuid #unique IDs for collections
+import shutil # Used for file handling, unique IDs, moving/deleting files.
+import pdfplumber #Extracts text from PDFs.
+from langchain.text_splitter import RecursiveCharacterTextSplitter #Splits PDF text into small chunks (so LLM can handle it).
+from langchain_community.vectorstores import Chroma #Vector database to store and search embeddings.
+from langchain_community.embeddings import HuggingFaceEmbeddings #Generates embeddings from text using sentence-transformers.
+from langchain_ollama import OllamaLLM #Lets you connect LangChain with Ollama’s local LLaMA models.
+from transformers import pipeline #Hugging Face pipelines (QA, summarization, translation, etc.).
+from langdetect import detect #Detects the language of user’s question.
+from deep_translator import GoogleTranslator #Translates between languages.
 
 try:
     from PIL import Image
