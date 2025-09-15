@@ -80,3 +80,5 @@ ollama pull qwen:0.5b
 
 youtube 
 https://github.com/tonykipkemboi/ollama_pdf_rag/blob/main/notebooks/experiments/updated_rag_notebook.ipynb
+
+Retrieval-Augmented Generation-RAG

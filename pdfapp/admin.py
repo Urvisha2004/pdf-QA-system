@@ -1,5 +1,4 @@
 from django.contrib import admin
-from .models import PDFDocument, QuestionHistory
+from .models import ChatHistory
 
-admin.site.register(PDFDocument)
-admin.site.register(QuestionHistory)
+admin.site.register(ChatHistory)

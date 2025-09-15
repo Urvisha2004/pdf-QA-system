@@ -1,25 +1,124 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+    .question-form {
+        max-width: 600px;
+        margin-bottom: 20px;
+    }
+
+    .answer-box {
+        margin-top: 20px;
+        padding: 15px;
+        border: 1px solid #ccc;
+        background-color: #f9f9f9;
+        border-radius: 5px;
+    }
+
+    .history-list {
+        max-width: 600px;
+        margin-top: 20px;
+    }
+
+    .history-item {
+        margin-bottom: 15px;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        background-color: #fff;
+    }
+
+    .history-item summary {
+        cursor: pointer;
+        font-weight: bold;
+        color: #333;
+    }
+
+    .history-item details[open] summary {
+        color: #007bff;
+    }
+
+    .history-item p {
+        margin: 5px 0;
+    }
+
+    .timestamp {
+        color: #888;
+        font-size: 0.9em;
+    }
+
+    .reset-link {
+        display: inline-block;
+        margin-top: 20px;
+        text-decoration: none;
+        color: #007bff;
+        font-weight: bold;
+    }
+
+    .reset-link:hover {
+        text-decoration: underline;
+    }
+
+    .no-history {
+        color: #888;
+        font-style: italic;
+    }
+
+    .message,
+    .error {
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+    }
+
+    .message {
+        background-color: #d4edda;
+        color: #155724;
+    }
+
+    .error {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+</style>
+
 <h2>Ask a Question</h2>
 
 {% if message %}
-<p style="color: green;">{{ message }}</p>
+<div class="message">{{ message }}</div>
 {% endif %}
 
 {% if error %}
-<p style="color: red;">{{ error }}</p>
+<div class="error">{{ error }}</div>
 {% endif %}
 
-<form method="post" action="{% url 'ask_question' %}">
+<form method="post" action="{% url 'ask_question' %}" class="question-form">
     {% csrf_token %}
     {{ form.as_p }}
     <button type="submit">Get Answer</button>
 </form>
 
 {% if answer %}
-<h3>Answer:</h3>
-<div style="margin-top:10px; padding:10px; border:1px solid #ccc; background-color:#f9f9f9;">
+<h3>Latest Answer</h3>
+<div class="answer-box">
     {{ answer|safe }}
 </div>
 {% endif %}
+
+<h3>Chat History</h3>
+<div class="history-list">
+    {% if chat_history %}
+    {% for chat in chat_history %}
+    <details class="history-item">
+        <summary>Question: {{ chat.question|truncatechars:50 }}</summary>
+        <p><strong>Full Question:</strong> {{ chat.question }}</p>
+        <p><strong>Answer:</strong> {{ chat.answer|safe }}</p>
+        <p class="timestamp">Asked on: {{ chat.created_at|date:"F d, Y H:i" }}</p>
+    </details>
+    {% endfor %}
+    {% else %}
+    <p class="no-history">No questions asked yet.</p>
+    {% endif %}
+</div>
+
+<p><a href="{% url 'reset_session' %}" class="reset-link">Reset Session</a></p>
 {% endblock %}

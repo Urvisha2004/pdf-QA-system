@@ -297,10 +297,15 @@ def reset_session(request):
         del SESSION_VECTOR_STORES[user_id]
     request.session.flush()
     return redirect('upload_pdf')'''
+
+
+
 import os
 import uuid
 from django.shortcuts import render, redirect
 from .forms import PDFUploadForm, QuestionForm
+from .models import ChatHistory
+
 from .utils import (
     process_pdf_to_chroma,
     ask_question_multilingual,
@@ -309,6 +314,7 @@ from .utils import (
     format_answer,
     UPLOAD_DIR
 )
+from .models import ChatHistory
 
 # ---------------- Upload PDF ----------------
 def upload_pdf(request):
@@ -317,7 +323,6 @@ def upload_pdf(request):
         if not uploaded_file:
             return render(request, "uploadpdf.html", {"error": "Please select a PDF file!", "form": PDFUploadForm()})
 
-        # Save temporarily
         pdf_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}.pdf")
         with open(pdf_path, "wb+") as f:
             for chunk in uploaded_file.chunks():
@@ -329,9 +334,8 @@ def upload_pdf(request):
         except Exception as e:
             return render(request, "uploadpdf.html", {"error": f"PDF processing failed: {e}", "form": PDFUploadForm()})
         finally:
-            os.remove(pdf_path)  # always delete uploaded file
+            os.remove(pdf_path)
 
-        # Save collection name in session
         request.session['collection_name'] = collection_name
         request.session['vector_db_loaded'] = True
 
@@ -347,10 +351,8 @@ def ask_question_view(request):
 
     if not collection_name:
         error = "Session expired or no PDF uploaded. Please re-upload PDF."
-        form = QuestionForm()
-        return render(request, "ask.html", {"form": form, "answer": answer, "error": error})
+        return render(request, "ask.html", {"form": QuestionForm(), "answer": answer, "error": error})
 
-    # Load vector DB only once per session
     vector_db = load_vector_db(collection_name)
 
     if request.method == "POST":
@@ -361,14 +363,30 @@ def ask_question_view(request):
             try:
                 raw_answer = ask_question_multilingual(vector_db, question, lang)
                 answer = format_answer(raw_answer)
+
+                # Save chat history in DB
+                ChatHistory.objects.create(
+                    session_id=request.session.session_key,
+                    question=question,
+                    answer=answer
+                )
+
             except Exception as e:
                 error = f"Error generating answer: {e}"
     else:
         form = QuestionForm()
 
-    return render(request, "ask.html", {"form": form, "answer": answer, "error": error})
+    # Retrieve chat history
+    chat_history = ChatHistory.objects.filter(session_id=request.session.session_key).order_by('id')
 
-# ---------------- Reset/Delete Notebook ----------------
+    return render(request, "ask.html", {
+        "form": form,
+        "answer": answer,
+        "error": error,
+        "chat_history": chat_history
+    })
+
+# ---------------- Reset Session ----------------
 def reset_session(request):
     collection_name = request.session.get('collection_name')
     if collection_name:

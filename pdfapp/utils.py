@@ -373,16 +373,19 @@ def ask_question_multilingual(vector_db: Chroma, user_question: str, target_lang
     return answer_en'''
 
 import os
-import uuid #unique IDs for collections
-import shutil # Used for file handling, unique IDs, moving/deleting files.
-import pdfplumber #Extracts text from PDFs.
-from langchain.text_splitter import RecursiveCharacterTextSplitter #Splits PDF text into small chunks (so LLM can handle it).
-from langchain_community.vectorstores import Chroma #Vector database to store and search embeddings.
-from langchain_community.embeddings import HuggingFaceEmbeddings #Generates embeddings from text using sentence-transformers.
-from langchain_ollama import OllamaLLM #Lets you connect LangChain with Ollama’s local LLaMA models.
-from transformers import pipeline #Hugging Face pipelines (QA, summarization, translation, etc.).
-from langdetect import detect #Detects the language of user’s question.
-from deep_translator import GoogleTranslator #Translates between languages.
+import uuid
+import shutil
+import pdfplumber
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from transformers import pipeline
+from langdetect import detect
+from deep_translator import GoogleTranslator
+import logging
+from .models import ChatHistory
+
 
 try:
     from PIL import Image
@@ -390,6 +393,8 @@ try:
     OCR_AVAILABLE = True
 except:
     OCR_AVAILABLE = False
+
+logging.basicConfig(level=logging.INFO)
 
 # ---------------- Paths ----------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -402,11 +407,29 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 EMBED_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 LLM_MODEL = "qwen2.5:1.5b"  # Ollama local model
 
-# Load Ollama LLM only once (global)
+# Ollama LLM
 ollama_llm = OllamaLLM(model=LLM_MODEL)
 
-# Cache vector DBs to avoid reloading every time
+# Fallback local HF model
+fallback_llm = pipeline("text-generation", model="TheBloke/guanaco-7B-HF", max_new_tokens=200)
+
+# Cache
 VECTOR_CACHE = {}
+TRANSLATION_CACHE = {}
+
+# ---------------- Helpers ----------------
+def get_splitter(text_length):
+    if text_length > 50000:
+        return RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=500)
+    return RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+
+def translate_cached(text, source, target):
+    key = f"{source}->{target}:{text}"
+    if key in TRANSLATION_CACHE:
+        return TRANSLATION_CACHE[key]
+    translated = GoogleTranslator(source=source, target=target).translate(text)
+    TRANSLATION_CACHE[key] = translated
+    return translated
 
 # ---------------- PDF Extraction ----------------
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -415,7 +438,6 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         for page in pdf.pages:
             text += (page.extract_text() or "") + "\n"
 
-    # Fallback OCR if no text
     if not text.strip() and OCR_AVAILABLE:
         from pdf2image import convert_from_path
         pages = convert_from_path(pdf_path)
@@ -424,14 +446,15 @@ def extract_text_from_pdf(pdf_path: str) -> str:
 
     return text.strip()
 
-# ---------------- Process PDF into Chroma ----------------
+# ---------------- Process PDF ----------------
 def process_pdf_to_chroma(pdf_path: str, collection_name: str) -> str:
     raw_text = extract_text_from_pdf(pdf_path)
     if not raw_text:
         raise ValueError("No text found in PDF")
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    splitter = get_splitter(len(raw_text))
     chunks = splitter.split_text(raw_text)
+    logging.info(f"PDF split into {len(chunks)} chunks")
 
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
     vector_db = Chroma.from_texts(
@@ -441,16 +464,12 @@ def process_pdf_to_chroma(pdf_path: str, collection_name: str) -> str:
         persist_directory=CHROMA_ROOT
     )
     vector_db.persist()
-
-    # Cache in memory
     VECTOR_CACHE[collection_name] = vector_db
     return collection_name
 
-# ---------------- Reload Vector DB (with cache) ----------------
 def load_vector_db(collection_name: str) -> Chroma:
     if collection_name in VECTOR_CACHE:
         return VECTOR_CACHE[collection_name]
-
     vector_db = Chroma(
         collection_name=collection_name,
         embedding_function=HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME),
@@ -466,18 +485,16 @@ def ask_question(vector_db: Chroma, question: str, k: int = 5) -> str:
 
     retriever = vector_db.as_retriever(search_kwargs={"k": k})
     docs = retriever.get_relevant_documents(question)
+    logging.info(f"Retrieved {len(docs)} docs for question: {question}")
 
-    # If nothing found → return message
     if not docs:
         return "❌ Not found in PDF"
 
-    # Join docs as context
     context = "\n\n".join([d.page_content for d in docs])
 
-    # Strict prompt
     prompt = f"""
-You are a PDF Question Answering Assistant. 
-ONLY use the context below to answer. 
+You are a PDF Question Answering Assistant.
+ONLY use the context below to answer.
 If the answer is not in the context, reply with: "❌ Not found in PDF".
 
 Context:
@@ -493,9 +510,8 @@ Answer:
         result = ollama_llm(prompt)
         return result.strip() if isinstance(result, str) else getattr(result, "content", str(result)).strip()
     except Exception as e:
-        print("Ollama error:", e)
-        pipe = pipeline("text-generation", model="gpt2", max_new_tokens=200)
-        return pipe(prompt)[0]["generated_text"]
+        logging.warning(f"Ollama error: {e}, using fallback LLM")
+        return fallback_llm(prompt)[0]["generated_text"]
 
 # ---------------- Multilingual QA ----------------
 def ask_question_multilingual(vector_db: Chroma, user_question: str, target_lang: str = "en") -> str:
@@ -504,11 +520,11 @@ def ask_question_multilingual(vector_db: Chroma, user_question: str, target_lang
     except:
         src_lang = "en"
 
-    q_en = GoogleTranslator(source=src_lang, target="en").translate(user_question) if src_lang != "en" else user_question
+    q_en = translate_cached(user_question, src_lang, "en") if src_lang != "en" else user_question
     answer_en = ask_question(vector_db, q_en)
 
     if target_lang != "en":
-        return GoogleTranslator(source="en", target=target_lang).translate(answer_en)
+        return translate_cached(answer_en, "en", target_lang)
     return answer_en
 
 # ---------------- Delete Collection ----------------
@@ -519,18 +535,22 @@ def delete_collection(collection_name: str):
     if collection_name in VECTOR_CACHE:
         del VECTOR_CACHE[collection_name]
 
+def cleanup_all_chroma():
+    for collection_name in list(VECTOR_CACHE.keys()):
+        delete_collection(collection_name)
+    VECTOR_CACHE.clear()
+    logging.info("All Chroma clients closed and cache cleared.")    
+
 # ---------------- Format Answer ----------------
 def format_answer(raw_answer: str) -> str:
     text = raw_answer.strip()
     formatted = []
-
     for line in text.split("\n"):
         line = line.strip()
         if line:
-            if ":" in line:  # treat "Title: description" format
+            if ":" in line:
                 title, desc = line.split(":", 1)
                 formatted.append(f"<b>{title.strip()}</b><br>{desc.strip()}")
             else:
                 formatted.append(f"• {line}")
-
     return "<br><br>".join(formatted)
