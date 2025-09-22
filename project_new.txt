@@ -1,0 +1,474 @@
+1.base.html:-
+--------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}PDF QA System{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+    <style>
+        :root {
+            --taskbar-color: #191938;
+            --form-bg-color: #5d6e7b;
+            --page-bg-color: #a3c2bf;
+            --text-color: #e5f2f0;
+        }
+        body { background-color: var(--page-bg-color); color: var(--text-color); }
+        .navbar { background-color: var(--taskbar-color); }
+        .form-container { background-color: var(--form-bg-color); padding: 20px; border-radius: 10px; }
+        .btn-primary { background-color: var(--taskbar-color); border: none; }
+        .btn-primary:hover { background-color: #2c2c54; }
+        .answer-box, .history-item { background-color: var(--form-bg-color); padding: 15px; border-radius: 8px; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container-fluid">
+            <a class="navbar-brand text-light" href="{% url 'upload_pdf' %}">PDF QA System</a>
+            <div class="d-flex">
+                {% if user.is_authenticated %}
+                    <span class="navbar-text text-light me-3">Hi, {{ user.username }}</span>
+                    <a href="{% url 'logout' %}" class="btn btn-sm btn-light">Logout</a>
+                {% else %}
+                    <a href="{% url 'login' %}" class="btn btn-sm btn-light me-2">Login</a>
+                    <a href="{% url 'register' %}" class="btn btn-sm btn-outline-light">Register</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        {% if messages %}
+            {% for message in messages %}
+                <div class="alert alert-warning">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
+___________________________
+2.uploadpdf.html
+{% extends "base.html" %}
+{% block title %}Upload PDF{% endblock %}
+
+{% block content %}
+<h2>Upload PDF</h2>{% extends "base.html" %}
+{% block title %}Ask Question{% endblock %}
+
+{% block content %}
+<h2>Ask a Question</h2>
+<div class="form-container">
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit" class="btn btn-primary">Ask</button>
+    </form>
+</div>
+
+{% if answer %}
+<div class="answer-box">
+    <h5>Answer:</h5>
+    <p>{{ answer }}</p>
+</div>
+{% endif %}
+
+<h3>History</h3>
+<div>
+    {% for item in history %}
+        <div class="history-item">
+            <strong>Q:</strong> {{ item.question }}<br>
+            <strong>A:</strong> {{ item.answer }}
+        </div>
+    {% empty %}
+        <p>No history yet.</p>
+    {% endfor %}
+</div>
+{% endblock %}
+
+<div class="form-container">
+    {% if form.errors %}
+        <div class="alert alert-danger">
+            {{ form.errors }}
+        </div>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit" class="btn btn-primary">Upload PDF</button>
+    </form>
+</div>
+{% endblock %}
+______________________________
+3.ask.html:-
+{% extends "base.html" %}
+{% block title %}Ask Question{% endblock %}
+
+{% block content %}
+<h2>Ask a Question</h2>
+<div class="form-container">
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit" class="btn btn-primary">Ask</button>
+    </form>
+</div>
+
+{% if answer %}
+<div class="answer-box">
+    <h5>Answer:</h5>
+    <p>{{ answer }}</p>
+</div>
+{% endif %}
+
+<h3>History</h3>
+<div>
+    {% for item in history %}
+        <div class="history-item">
+            <strong>Q:</strong> {{ item.question }}<br>
+            <strong>A:</strong> {{ item.answer }}
+        </div>
+    {% empty %}
+        <p>No history yet.</p>
+    {% endfor %}
+</div>
+{% endblock %}
+__________________________________
+Register.html:-
+{% extends "base.html" %}
+{% block title %}Register{% endblock %}
+{% block content %}
+<div class="form-container">
+    <h2>Register</h2>
+    <form method="post">
+        {% csrf_token %}
+        <p><input type="text" name="username" placeholder="Username" required></p>
+        <p><input type="password" name="password" placeholder="Password" required></p>
+        <p><input type="password" name="confirm_password" placeholder="Confirm Password" required></p>
+        <button type="submit" class="btn btn-primary">Register</button>
+    </form>
+    <p class="mt-2">Already have an account? <a href="{% url 'login' %}">Login</a></p>
+</div>
+{% endblock %}
+
+___________________________
+login.html:-
+{% extends "base.html" %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<div class="form-container">
+    <h2>Login</h2>
+    <form method="post">
+        {% csrf_token %}
+        <p><input type="text" name="username" placeholder="Username" required></p>
+        <p><input type="password" name="password" placeholder="Password" required></p>
+        <button type="submit" class="btn btn-primary">Login</button>
+    </form>
+    <p class="mt-2">Don't have an account? <a href="{% url 'register' %}">Register</a></p>
+</div>
+{% endblock %}
+
+___________________________
+utils.py:-
+import requests
+import json
+from PyPDF2 import PdfReader
+from sentence_transformers import SentenceTransformer
+import faiss
+from deep_translator import GoogleTranslator
+
+# Ollama Server URL
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+# ---------------- Ollama Integration ----------------
+def get_ollama_response(prompt):
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "model": "qwen:0.5b",
+        "prompt": prompt,
+        "stream": False
+    }
+    try:
+        response = requests.post(OLLAMA_URL, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        result = response.json()
+        return result.get("response", "")
+    except requests.exceptions.RequestException as e:
+        print("Error connecting to Ollama:", e)
+        return "Error: Could not reach Ollama server."
+
+# ---------------- PDF Parsing ----------------
+def pdf_to_text(file_path):
+    reader = PdfReader(file_path)
+    text = ""
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
+    return text
+
+# ---------------- Embeddings + FAISS ----------------
+def create_embeddings(text_chunks):
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    vectors = model.encode(text_chunks)
+    index = faiss.IndexFlatL2(vectors.shape[1])
+    index.add(vectors)
+    return index, vectors, model
+
+def search_query(query, index, vectors, texts, model, top_k=3):
+    q_vector = model.encode([query])
+    distances, indices = index.search(q_vector, top_k)
+    results = [texts[i] for i in indices[0]]
+    return results
+
+# ---------------- Full QA Pipeline ----------------
+def ask_question(pdf_path, question, answer_lang='en'):
+    # 1️⃣ Extract PDF text
+    text = pdf_to_text(pdf_path)
+    if not text.strip():
+        return "PDF text could not be extracted properly."
+
+    # 2️⃣ Split into meaningful chunks
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    chunks = [line for line in lines if len(line) > 20]  # ignore tiny lines
+    if not chunks:
+        return "No substantial content found in PDF."
+
+    # 3️⃣ Create FAISS index
+    index, vectors, model = create_embeddings(chunks)
+
+    # 4️⃣ Search relevant chunks
+    relevant_chunks = search_query(question, index, vectors, chunks, model)
+    context = "\n".join(relevant_chunks)
+
+    # 5️⃣ Build prompt for Ollama
+    if "summary" in question.lower():
+        prompt = f"Summarize the following PDF content clearly and concisely:\n\n{context}\n\nSummary:"
+    else:
+        prompt = f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+
+    # 6️⃣ Get Ollama response
+    answer = get_ollama_response(prompt)
+
+    # 7️⃣ Translate answer if needed
+    if answer_lang != 'en':
+        try:
+            answer = GoogleTranslator(source='en', target=answer_lang).translate(answer)
+        except Exception as e:
+            print("Translation error:", e)
+
+    return answer
+
+___________________________
+views.py;-
+from django.shortcuts import render, redirect
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import User
+from django.contrib import messages
+
+from .forms import PDFUploadForm, QuestionForm
+from .models import PDFDocument, QAHistory
+from .utils import ask_question
+
+
+# ---------------- Registration ----------------
+def register_view(request):
+    """
+    User registration view.
+    - Validates passwords.
+    - Checks if username exists.
+    - Creates user and auto-login.
+    """
+    if request.method == "POST":
+        username = request.POST.get("username")
+        password = request.POST.get("password")
+        confirm_password = request.POST.get("confirm_password")
+
+        if password != confirm_password:
+            messages.error(request, "Passwords do not match.")
+            return redirect("register")
+
+        if User.objects.filter(username=username).exists():
+            messages.error(request, "Username already taken.")
+            return redirect("register")
+
+        user = User.objects.create_user(username=username, password=password)
+        login(request, user)  # auto-login after registration
+        return redirect("upload_pdf")
+
+    return render(request, "register.html")
+
+
+# ---------------- Login ----------------
+def login_view(request):
+    """
+    User login view.
+    - Authenticates credentials.
+    - Redirects to upload PDF if successful.
+    """
+    if request.method == "POST":
+        username = request.POST.get("username")
+        password = request.POST.get("password")
+        user = authenticate(request, username=username, password=password)
+        if user is not None:
+            login(request, user)
+            return redirect("upload_pdf")
+        else:
+            messages.error(request, "Invalid credentials.")
+            return redirect("login")
+    return render(request, "login.html")
+
+
+# ---------------- Logout ----------------
+def logout_view(request):
+    """
+    User logout view.
+    - Clears session and redirects to login page.
+    """
+    logout(request)
+    return redirect("login")
+
+
+# ---------------- Upload PDF ----------------
+@login_required(login_url="login")
+def upload_pdf(request):
+    """
+    PDF upload view.
+    - Requires login.
+    - Handles file upload.
+    - Redirects to ask question page after upload.
+    """
+    if request.method == "POST":
+        form = PDFUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            pdf = form.save()
+            return redirect("ask", pdf_id=pdf.id)
+    else:
+        form = PDFUploadForm()
+    return render(request, "uploadpdf.html", {"form": form})
+
+
+# ---------------- Ask Questions ----------------
+@login_required(login_url="login")
+def ask_question_view(request, pdf_id):
+    """
+    PDF Question-Answer view.
+    - Requires login.
+    - Uses Ollama + FAISS for Q&A.
+    - Saves Q&A history per PDF.
+    """
+    pdf = PDFDocument.objects.get(id=pdf_id)
+    answer = None
+
+    if request.method == "POST":
+        form = QuestionForm(request.POST)
+        if form.is_valid():
+            question = form.cleaned_data["question"]
+            answer_lang = form.cleaned_data.get("answer_lang", "en")
+
+            # Get answer from Ollama utils
+            answer = ask_question(pdf.file.path, question, answer_lang)
+
+            # Save history
+            QAHistory.objects.create(pdf=pdf, question=question, answer=answer)
+    else:
+        form = QuestionForm()
+
+    history = QAHistory.objects.filter(pdf=pdf).order_by("-asked_at")
+
+    return render(
+        request,
+        "ask.html",
+        {
+            "pdf": pdf,
+            "form": form,
+            "answer": answer,
+            "history": history,
+        },
+    )
+______________________________
+urls.py(pdfbase)
+
+from django.contrib import admin
+from django.urls import path, include
+from pdfapp import views
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+
+    # Authentication
+    path('login/', views.login_view, name='login'),
+    path('logout/', views.logout_view, name='logout'),
+    path('register/', views.register_view, name='register'),
+
+    # PDF app
+    path('pdf/', include('pdfapp.urls')),
+
+    # Root redirects to login
+    path('', lambda request: redirect('upload_pdf') if request.user.is_authenticated else redirect('login')),
+]
+___________________________
+urls.py (pdfapp):-
+from django.urls import path
+from . import views
+from django.shortcuts import redirect
+
+
+urlpatterns = [
+    path('upload/', views.upload_pdf, name='upload_pdf'),
+    path('ask/<int:pdf_id>/', views.ask_question_view, name='ask'),
+    path('', lambda request: redirect('upload_pdf')),          # /pdf/ → /pdf/upload/
+
+]
+___________________________
+models.py
+from django.db import models
+
+class PDFDocument(models.Model):
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to='pdfs/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.title
+
+class QAHistory(models.Model):
+    pdf = models.ForeignKey(PDFDocument, on_delete=models.CASCADE)
+    question = models.TextField()
+    answer = models.TextField()
+    asked_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.pdf.title} - {self.question[:50]}"
+___________________________
+___________________________
+admin.py:-
+from django.contrib import admin
+from .models import PDFDocument, QAHistory  # <-- use the correct model names
+
+# Register your models
+admin.site.register(PDFDocument)
+admin.site.register(QAHistory)
+
+___________________________
+forms.py:-
+
+from django import forms
+from .models import PDFDocument
+
+class PDFUploadForm(forms.ModelForm):
+    class Meta:
+        model = PDFDocument
+        fields = ['title', 'file']
+
+class QuestionForm(forms.Form):
+    question = forms.CharField(widget=forms.Textarea(attrs={'rows':2, 'cols':40}))
+    answer_lang = forms.ChoiceField(choices=[
+        ('en', 'English'),
+        ('hi', 'Hindi'),
+        ('fr', 'French'),
+        ('es', 'Spanish'),
+        ('gu', 'Gujarati'),
+        ('mr', 'Marathi'),
+    ], initial='en')
