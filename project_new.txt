@@ -1,5 +1,4 @@
 1.base.html:-
---------------
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -47,45 +46,14 @@
     </div>
 </body>
 </html>
-___________________________
-2.uploadpdf.html
+
+___________________________________________________
+2.upload_pdf
 {% extends "base.html" %}
 {% block title %}Upload PDF{% endblock %}
 
 {% block content %}
-<h2>Upload PDF</h2>{% extends "base.html" %}
-{% block title %}Ask Question{% endblock %}
-
-{% block content %}
-<h2>Ask a Question</h2>
-<div class="form-container">
-    <form method="post">
-        {% csrf_token %}
-        {{ form.as_p }}
-        <button type="submit" class="btn btn-primary">Ask</button>
-    </form>
-</div>
-
-{% if answer %}
-<div class="answer-box">
-    <h5>Answer:</h5>
-    <p>{{ answer }}</p>
-</div>
-{% endif %}
-
-<h3>History</h3>
-<div>
-    {% for item in history %}
-        <div class="history-item">
-            <strong>Q:</strong> {{ item.question }}<br>
-            <strong>A:</strong> {{ item.answer }}
-        </div>
-    {% empty %}
-        <p>No history yet.</p>
-    {% endfor %}
-</div>
-{% endblock %}
-
+<h2>Upload PDF</h2>
 <div class="form-container">
     {% if form.errors %}
         <div class="alert alert-danger">
@@ -99,7 +67,7 @@ ___________________________
     </form>
 </div>
 {% endblock %}
-______________________________
+___________________________________________________
 3.ask.html:-
 {% extends "base.html" %}
 {% block title %}Ask Question{% endblock %}
@@ -133,8 +101,8 @@ ______________________________
     {% endfor %}
 </div>
 {% endblock %}
-__________________________________
-Register.html:-
+___________________________________________________
+4.register.html
 {% extends "base.html" %}
 {% block title %}Register{% endblock %}
 {% block content %}
@@ -150,9 +118,8 @@ Register.html:-
     <p class="mt-2">Already have an account? <a href="{% url 'login' %}">Login</a></p>
 </div>
 {% endblock %}
-
-___________________________
-login.html:-
+___________________________________________________
+5.login:-
 {% extends "base.html" %}
 {% block title %}Login{% endblock %}
 {% block content %}
@@ -167,100 +134,9 @@ login.html:-
     <p class="mt-2">Don't have an account? <a href="{% url 'register' %}">Register</a></p>
 </div>
 {% endblock %}
+___________________________________________________
+views.py:-
 
-___________________________
-utils.py:-
-import requests
-import json
-from PyPDF2 import PdfReader
-from sentence_transformers import SentenceTransformer
-import faiss
-from deep_translator import GoogleTranslator
-
-# Ollama Server URL
-OLLAMA_URL = "http://localhost:11434/api/generate"
-
-# ---------------- Ollama Integration ----------------
-def get_ollama_response(prompt):
-    headers = {"Content-Type": "application/json"}
-    data = {
-        "model": "qwen:0.5b",
-        "prompt": prompt,
-        "stream": False
-    }
-    try:
-        response = requests.post(OLLAMA_URL, headers=headers, data=json.dumps(data))
-        response.raise_for_status()
-        result = response.json()
-        return result.get("response", "")
-    except requests.exceptions.RequestException as e:
-        print("Error connecting to Ollama:", e)
-        return "Error: Could not reach Ollama server."
-
-# ---------------- PDF Parsing ----------------
-def pdf_to_text(file_path):
-    reader = PdfReader(file_path)
-    text = ""
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text + "\n"
-    return text
-
-# ---------------- Embeddings + FAISS ----------------
-def create_embeddings(text_chunks):
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    vectors = model.encode(text_chunks)
-    index = faiss.IndexFlatL2(vectors.shape[1])
-    index.add(vectors)
-    return index, vectors, model
-
-def search_query(query, index, vectors, texts, model, top_k=3):
-    q_vector = model.encode([query])
-    distances, indices = index.search(q_vector, top_k)
-    results = [texts[i] for i in indices[0]]
-    return results
-
-# ---------------- Full QA Pipeline ----------------
-def ask_question(pdf_path, question, answer_lang='en'):
-    # 1️⃣ Extract PDF text
-    text = pdf_to_text(pdf_path)
-    if not text.strip():
-        return "PDF text could not be extracted properly."
-
-    # 2️⃣ Split into meaningful chunks
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    chunks = [line for line in lines if len(line) > 20]  # ignore tiny lines
-    if not chunks:
-        return "No substantial content found in PDF."
-
-    # 3️⃣ Create FAISS index
-    index, vectors, model = create_embeddings(chunks)
-
-    # 4️⃣ Search relevant chunks
-    relevant_chunks = search_query(question, index, vectors, chunks, model)
-    context = "\n".join(relevant_chunks)
-
-    # 5️⃣ Build prompt for Ollama
-    if "summary" in question.lower():
-        prompt = f"Summarize the following PDF content clearly and concisely:\n\n{context}\n\nSummary:"
-    else:
-        prompt = f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
-
-    # 6️⃣ Get Ollama response
-    answer = get_ollama_response(prompt)
-
-    # 7️⃣ Translate answer if needed
-    if answer_lang != 'en':
-        try:
-            answer = GoogleTranslator(source='en', target=answer_lang).translate(answer)
-        except Exception as e:
-            print("Translation error:", e)
-
-    return answer
-
-___________________________
-views.py;-
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
@@ -387,42 +263,99 @@ def ask_question_view(request, pdf_id):
             "history": history,
         },
     )
-______________________________
-urls.py(pdfbase)
+___________________________________________________
+utils.py:-
+import requests
+import json
+from PyPDF2 import PdfReader
+from sentence_transformers import SentenceTransformer
+import faiss
+from deep_translator import GoogleTranslator
 
-from django.contrib import admin
-from django.urls import path, include
-from pdfapp import views
+# Ollama Server URL
+OLLAMA_URL = "http://localhost:11434/api/generate"
 
-urlpatterns = [
-    path('admin/', admin.site.urls),
+# ---------------- Ollama Integration ----------------
+def get_ollama_response(prompt):
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "model": "qwen:0.5b",
+        "prompt": prompt,
+        "stream": False
+    }
+    try:
+        response = requests.post(OLLAMA_URL, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        result = response.json()
+        return result.get("response", "")
+    except requests.exceptions.RequestException as e:
+        print("Error connecting to Ollama:", e)
+        return "Error: Could not reach Ollama server."
 
-    # Authentication
-    path('login/', views.login_view, name='login'),
-    path('logout/', views.logout_view, name='logout'),
-    path('register/', views.register_view, name='register'),
+# ---------------- PDF Parsing ----------------
+def pdf_to_text(file_path):
+    reader = PdfReader(file_path)
+    text = ""
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
+    return text
 
-    # PDF app
-    path('pdf/', include('pdfapp.urls')),
+# ---------------- Embeddings + FAISS ----------------
+def create_embeddings(text_chunks):
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    vectors = model.encode(text_chunks)
+    index = faiss.IndexFlatL2(vectors.shape[1])
+    index.add(vectors)
+    return index, vectors, model
 
-    # Root redirects to login
-    path('', lambda request: redirect('upload_pdf') if request.user.is_authenticated else redirect('login')),
-]
-___________________________
-urls.py (pdfapp):-
-from django.urls import path
-from . import views
-from django.shortcuts import redirect
+def search_query(query, index, vectors, texts, model, top_k=3):
+    q_vector = model.encode([query])
+    distances, indices = index.search(q_vector, top_k)
+    results = [texts[i] for i in indices[0]]
+    return results
 
+# ---------------- Full QA Pipeline ----------------
+def ask_question(pdf_path, question, answer_lang='en'):
+    # 1️⃣ Extract PDF text
+    text = pdf_to_text(pdf_path)
+    if not text.strip():
+        return "PDF text could not be extracted properly."
 
-urlpatterns = [
-    path('upload/', views.upload_pdf, name='upload_pdf'),
-    path('ask/<int:pdf_id>/', views.ask_question_view, name='ask'),
-    path('', lambda request: redirect('upload_pdf')),          # /pdf/ → /pdf/upload/
+    # 2️⃣ Split into meaningful chunks
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    chunks = [line for line in lines if len(line) > 20]  # ignore tiny lines
+    if not chunks:
+        return "No substantial content found in PDF."
 
-]
-___________________________
-models.py
+    # 3️⃣ Create FAISS index
+    index, vectors, model = create_embeddings(chunks)
+
+    # 4️⃣ Search relevant chunks
+    relevant_chunks = search_query(question, index, vectors, chunks, model)
+    context = "\n".join(relevant_chunks)
+
+    # 5️⃣ Build prompt for Ollama
+    if "summary" in question.lower():
+        prompt = f"Summarize the following PDF content clearly and concisely:\n\n{context}\n\nSummary:"
+    else:
+        prompt = f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+
+    # 6️⃣ Get Ollama response
+    answer = get_ollama_response(prompt)
+
+    # 7️⃣ Translate answer if needed
+    if answer_lang != 'en':
+        try:
+            answer = GoogleTranslator(source='en', target=answer_lang).translate(answer)
+        except Exception as e:
+            print("Translation error:", e)
+
+    return answer
+
+___________________________________________________
+model.py
 from django.db import models
 
 class PDFDocument(models.Model):
@@ -441,19 +374,8 @@ class QAHistory(models.Model):
 
     def __str__(self):
         return f"{self.pdf.title} - {self.question[:50]}"
-___________________________
-___________________________
-admin.py:-
-from django.contrib import admin
-from .models import PDFDocument, QAHistory  # <-- use the correct model names
-
-# Register your models
-admin.site.register(PDFDocument)
-admin.site.register(QAHistory)
-
-___________________________
-forms.py:-
-
+___________________________________________________
+form.py
 from django import forms
 from .models import PDFDocument
 
@@ -472,3 +394,74 @@ class QuestionForm(forms.Form):
         ('gu', 'Gujarati'),
         ('mr', 'Marathi'),
     ], initial='en')
+___________________________________________________
+app.py
+from django.apps import AppConfig
+
+
+class PdfappConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'pdfapp'
+
+___________________________________________________
+admin.py
+from django.contrib import admin
+from .models import PDFDocument, QAHistory  # <-- use the correct model names
+
+# Register your models
+admin.site.register(PDFDocument)
+admin.site.register(QAHistory)
+___________________________________________________
+pdfapp.url
+from django.urls import path
+from . import views
+from django.shortcuts import redirect
+
+
+urlpatterns = [
+    path('upload/', views.upload_pdf, name='upload_pdf'),
+    path('ask/<int:pdf_id>/', views.ask_question_view, name='ask'),
+    path('', lambda request: redirect('upload_pdf')),          # /pdf/ → /pdf/upload/
+
+]
+___________________________________________________
+pdfbase.url
+from django.contrib import admin
+from django.urls import path, include
+from pdfapp import views
+from django.shortcuts import redirect
+
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+
+    # Authentication
+    path('login/', views.login_view, name='login'),
+    path('logout/', views.logout_view, name='logout'),
+    path('register/', views.register_view, name='register'),
+
+    # PDF app
+    path('pdf/', include('pdfapp.urls')),
+
+    # Root redirects to login
+    path('', lambda request: redirect('upload_pdf') if request.user.is_authenticated else redirect('login')),
+]
+
+
+'''urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('', views.upload_pdf, name='upload_pdf'),
+    path('ask/', views.ask_question_view, name='ask_question'),
+    path('registration/', views.register_view, name='registration'),
+    path('logout/', views.logout_view, name='logout'),
+    path('login/', views.login_view, name='login'),
+    path('forgetpass/', views.forgot_password_view, name='forgetpass'),
+    path('reset/', views.reset_session, name='reset_session'),
+]
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)'''
+  
+
+
+
+
+
