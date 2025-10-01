@@ -1,0 +1,378 @@
+models.py:-
+
+from django.db import models
+from django.contrib.auth.models import User
+
+
+class PDFDocument(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to="pdfs/")
+    faiss_path = models.CharField(max_length=255, blank=True, null=True)
+    summary = models.TextField(blank=True, null=True)
+    is_indexed = models.BooleanField(default=False)  # NEW: indexing status
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.title
+
+
+class QAHistory(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)  # NEW: track who asked
+    pdf = models.ForeignKey(PDFDocument, on_delete=models.CASCADE)
+    question = models.TextField()
+    answer = models.TextField()
+    answer_translated = models.TextField(blank=True, null=True)
+    language = models.CharField(max_length=10, default='en')
+    confidence = models.FloatField(default=0.0)  # NEW: FAISS similarity score
+    asked_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Q: {self.question[:30]}..."
+
+________________________________________
+views.py:-
+
+
+import os
+from django.shortcuts import render, redirect
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import User
+from django.contrib import messages
+from django.conf import settings
+
+from .forms import PDFUploadForm, QuestionForm
+from .models import PDFDocument, QAHistory
+from .utils import process_pdf_and_save_index, ask_question_with_index, pdf_to_text, summarize_pdf
+
+
+# ---------------- Registration ----------------
+def register_view(request):
+    if request.method == "POST":
+        username = request.POST.get("username")
+        password = request.POST.get("password")
+        confirm_password = request.POST.get("confirm_password")
+
+        if password != confirm_password:
+            messages.error(request, "Passwords do not match.")
+            return redirect("register")
+
+        if User.objects.filter(username=username).exists():
+            messages.error(request, "Username already taken.")
+            return redirect("register")
+
+        user = User.objects.create_user(username=username, password=password)
+        login(request, user)
+        return redirect("upload_pdf")
+
+    return render(request, "register.html")
+
+
+# ---------------- Login ----------------
+def login_view(request):
+    if request.method == "POST":
+        username = request.POST.get("username")
+        password = request.POST.get("password")
+        user = authenticate(request, username=username, password=password)
+        if user:
+            login(request, user)
+            return redirect("upload_pdf")
+        else:
+            messages.error(request, "Invalid credentials.")
+            return redirect("login")
+    return render(request, "login.html")
+
+
+# ---------------- Logout ----------------
+def logout_view(request):
+    logout(request)
+    return redirect("login")
+
+
+# ---------------- Upload PDF ----------------
+@login_required(login_url="login")
+def upload_pdf(request):
+    if request.method == "POST":
+        form = PDFUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            pdf = form.save(commit=False)
+            pdf.user = request.user
+            pdf.save()
+
+            index_dir = os.path.join(settings.MEDIA_ROOT, "indexes")
+            os.makedirs(index_dir, exist_ok=True)
+            index_path = os.path.join(index_dir, f"pdf_{pdf.id}.index")
+
+            process_pdf_and_save_index(pdf.file.path, index_path)
+            pdf.faiss_path = index_path
+
+            # Auto-generate summary
+            text = pdf_to_text(pdf.file.path)
+            pdf.summary = summarize_pdf(text)
+            pdf.save()
+
+            messages.success(request, "PDF uploaded and processed successfully!")
+            return redirect("ask_question", pdf_id=pdf.id)
+    else:
+        form = PDFUploadForm()
+
+    return render(request, "uploadpdf.html", {"form": form})
+
+
+# ---------------- Ask Questions ----------------
+@login_required(login_url="login")
+def ask_question_view(request, pdf_id):
+    pdf = PDFDocument.objects.get(id=pdf_id)
+    answer = None
+    answer_translated = None
+    relevant_chunks = []
+    scores = []
+
+    if request.method == "POST":
+        form = QuestionForm(request.POST)
+        if form.is_valid():
+            question = form.cleaned_data["question"]
+            answer_lang = form.cleaned_data.get("answer_lang", "en")
+
+            # Include previous Q&A for context
+            request.session.setdefault(f"pdf_{pdf.id}_chat", [])
+            history_context = "\n".join(
+                [f"Q: {q['question']}\nA: {q['answer']}" for q in request.session[f"pdf_{pdf.id}_chat"]]
+            )
+            prompt_question = f"{history_context}\nNew Question: {question}" if history_context else question
+
+            answer, answer_translated, relevant_chunks, scores = ask_question_with_index(
+                index_path=pdf.faiss_path,
+                question=prompt_question,
+                answer_lang=answer_lang,
+                top_k=15
+            )
+
+            # Store in session for follow-ups
+            request.session[f"pdf_{pdf.id}_chat"].append({
+                "question": question,
+                "answer": answer
+            })
+
+            # Save in DB
+            QAHistory.objects.create(
+                pdf=pdf,
+                question=question,
+                answer=answer,
+                answer_translated=answer_translated,
+                language=answer_lang
+            )
+    else:
+        form = QuestionForm()
+
+    history = QAHistory.objects.filter(pdf=pdf).order_by("-asked_at")
+
+    return render(
+        request,
+        "ask.html",
+        {
+            "pdf": pdf,
+            "form": form,
+            "answer": answer,
+            "answer_translated": answer_translated,
+            "relevant_chunks": zip(relevant_chunks, scores),
+            "history": history,
+        },
+    )
+
+________________________________________
+utils.py:-
+
+import os
+import json
+import requests
+import faiss
+import numpy as np
+from PyPDF2 import PdfReader
+from sentence_transformers import SentenceTransformer
+from deep_translator import GoogleTranslator
+
+# Ollama server URL
+OLLAMA_URL = "http://localhost:11434/api/generate"
+EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+
+
+# ---------------- Ollama Integration ----------------
+def get_ollama_response(prompt, model="qwen:0.5b"):
+    headers = {"Content-Type": "application/json"}
+    data = {"model": model, "prompt": prompt, "stream": False}
+    try:
+        response = requests.post(OLLAMA_URL, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        result = response.json()
+        return result.get("response", "").strip()
+    except requests.exceptions.RequestException as e:
+        print("Error connecting to Ollama:", e)
+        return "Error: Could not reach Ollama server."
+
+
+# ---------------- PDF Parsing ----------------
+def pdf_to_text(file_path):
+    reader = PdfReader(file_path)
+    text = ""
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
+    return text
+
+
+# ---------------- Chunking with Overlap ----------------
+def chunk_text(text, chunk_size=700, overlap=100):
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        if len(chunk.strip()) > 50:
+            chunks.append(chunk)
+    return chunks
+
+
+# ---------------- Preprocess & Save FAISS ----------------
+def process_pdf_and_save_index(pdf_path, index_path):
+    text = pdf_to_text(pdf_path)
+    chunks = chunk_text(text)
+
+    if not chunks:
+        return None
+
+    vectors = EMBED_MODEL.encode(chunks)
+    index = faiss.IndexFlatL2(vectors.shape[1])
+    index.add(np.array(vectors, dtype='float32'))
+
+    # Save FAISS index
+    faiss.write_index(index, index_path)
+
+    # Save chunks alongside
+    with open(index_path + ".json", "w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+
+    return index_path
+
+
+# ---------------- Load + Search ----------------
+def search_query(query, index_path, top_k=15):
+    if not os.path.exists(index_path) or not os.path.exists(index_path + ".json"):
+        return [], []
+
+    index = faiss.read_index(index_path)
+    with open(index_path + ".json", "r", encoding="utf-8") as f:
+        chunks = json.load(f)
+
+    q_vector = EMBED_MODEL.encode([query])
+    distances, indices = index.search(np.array(q_vector, dtype='float32'), top_k)
+
+    results = []
+    scores = []
+    for idx, i in enumerate(indices[0]):
+        if i < len(chunks):
+            results.append(chunks[i])
+            scores.append(float(distances[0][idx]))
+    return results, scores
+
+
+# ---------------- Full QA Pipeline ----------------
+def ask_question_with_index(index_path, question, answer_lang="en", top_k=15):
+    # Retrieve top chunks + scores
+    relevant_chunks, scores = search_query(question, index_path, top_k=top_k)
+
+    if not relevant_chunks:
+        return "The PDF does not mention this.", None, None, None
+
+    # Combine chunks into a single context
+    context = "\n\n".join(relevant_chunks)
+    words = context.split()
+    if len(words) > 2000:
+        context = " ".join(words[:2000])
+
+    # Prepare prompt
+    if "summary" in question.lower():
+        prompt = (
+            f"You are an expert summarizer.\n"
+            f"Summarize the following PDF content clearly and accurately:\n\n"
+            f"{context}\n\nRequirements:\n- Full sentences\n- Include numbers, names, dates, key facts\n- Use bullet points"
+        )
+    else:
+        prompt = (
+            f"You are a strict assistant. Use ONLY the PDF content below to answer.\n"
+            f"If the answer is not in the PDF, reply exactly: 'The PDF does not mention this.'\n\n"
+            f"PDF content:\n{context}\n\nQuestion: {question}\nAnswer step-by-step and clearly."
+        )
+
+    # Get answer from Ollama
+    answer = get_ollama_response(prompt)
+
+    # Translate if needed
+    answer_translated = answer
+    if answer_lang != "en":
+        try:
+            answer_translated = GoogleTranslator(source="en", target=answer_lang).translate(answer)
+        except Exception as e:
+            print("Translation error:", e)
+
+    return answer, answer_translated, relevant_chunks, scores
+
+
+# ---------------- PDF Summarization ----------------
+def summarize_pdf(pdf_text):
+    prompt = f"Summarize the PDF content:\n{pdf_text}\nProvide clear bullet points and key details."
+    return get_ollama_response(prompt)
+
+________________________________________
+forms.py:-
+
+from django import forms
+from .models import PDFDocument
+
+class PDFUploadForm(forms.ModelForm):
+    class Meta:
+        model = PDFDocument
+        fields = ["file", "title"]  # user is set in view
+
+class QuestionForm(forms.Form):
+    question = forms.CharField(widget=forms.Textarea(attrs={"rows": 2}), max_length=2000)
+    answer_lang = forms.ChoiceField(choices=[
+        ('en', 'English'),
+        ('hi', 'Hindi'),
+        ('fr', 'French'),
+        ('es', 'Spanish'),
+        ('gu', 'Gujarati'),
+        ('mr', 'Marathi'),
+    ], initial='en')
+	
+________________________________________
+from django.contrib import admin
+from .models import PDFDocument, QAHistory
+
+admin.site.register(PDFDocument)
+admin.site.register(QAHistory)
+
+
+________________________________________
+from django.contrib import admin
+from django.urls import path, include
+from pdfapp import views
+from django.shortcuts import redirect
+
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+
+    # Authentication
+    path('login/', views.login_view, name='login'),
+    path('logout/', views.logout_view, name='logout'),
+    path('register/', views.register_view, name='register'),
+    path("pdf/ask/<int:pdf_id>/", views.ask_question_view, name="ask_question"),  # <-- name must match
+ 
+    # PDF app
+    path('pdf/', include('pdfapp.urls')),
+
+    # Root redirects to login
+    path('', lambda request: redirect('upload_pdf') if request.user.is_authenticated else redirect('login')),
+]
